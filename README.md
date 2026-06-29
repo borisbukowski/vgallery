@@ -1,19 +1,20 @@
 # VGallery
 
-A simple Go image gallery that groups photos by **year and month of capture** and serves them over HTTP. It uses EXIF capture time when available and falls back to file modification time if EXIF data is missing.[cite:25][cite:103]
+A simple Go image gallery that groups photos by **year and month of capture** and serves them over HTTP. It uses EXIF capture time when available and falls back to file modification time when EXIF data is missing.
 
 ## Features
 
-- Groups images by **year and month** using capture time when possible.[cite:25][cite:103]
-- Shows a **preview image** for each month on the index page by using the first image in that month group.[cite:120]
-- Serves each month on its own page at `/month/YYYY-MM` instead of putting everything on one page.[cite:103]
-- Serves original image files from `/imgs/...` with configurable cache headers.[cite:63]
+- Groups images by **year and month** using capture time when possible.
+- Sorts images newest first.
+- Shows a **preview image** for each month on the index page.
+- Serves a separate page for each month at `/month/YYYY-MM`.
+- Falls back to file modification time for formats without usable EXIF metadata.
 
 ## Requirements
 
 - Go installed locally.
 - A folder containing images such as `.jpg`, `.jpeg`, `.png`, `.gif`, or `.webp`.
-- A Go module initialized in the project directory, because dependency management for libraries is module-based.[cite:43][cite:35]
+- A Go module initialized in the project directory.
 
 ## Project layout
 
@@ -45,14 +46,12 @@ Save the Go source as `gallery.go` in that directory.
 go mod init vgallery
 ```
 
-This creates a `go.mod` file for the project.[cite:43]
-
 ### 4. Add the EXIF dependency
 
-Use the `cozy` module path, because that is the module path declared by the package itself.[cite:25][cite:46]
+Use the same module path as the current source code:
 
 ```bash
-go get github.com/cozy/goexif2/exif
+go get github.com/xor-gate/goexif2/exif
 go mod tidy
 ```
 
@@ -88,21 +87,15 @@ Then run it:
 
 The program supports these flags:
 
-- `-dir` — directory containing images, supports paths starting with `~/`.
+- `-dir` — directory containing images, including paths starting with `~/`.
 - `-listen` — address to bind, for example `:8080` or `127.0.0.1:9000`.
 - `-title` — title shown in the HTML pages.
 - `-thumb-height` — thumbnail height in pixels on month pages.
-- `-cache-max-age` — cache lifetime in seconds for served images.
-- `-cache-immutable` — whether to append `immutable` to the `Cache-Control` header.[cite:63]
 
 Example:
 
 ```bash
-./vgallery \
-  -dir ~/media/good \
-  -listen 127.0.0.1:9000 \
-  -title "My Photos" \
-  -thumb-height 220
+./vgallery   -dir ~/media/good   -listen 127.0.0.1:9000   -title "My Photos"   -thumb-height 220
 ```
 
 ## Routes
@@ -111,7 +104,6 @@ The server exposes these main paths:
 
 - `/` — index page listing months with a preview image.
 - `/month/YYYY-MM` — page for a single month.
-- `/imgs/FILENAME` — original image file.[cite:63]
 
 Example month URL:
 
@@ -121,7 +113,7 @@ http://localhost:8080/month/2026-04
 
 ## How sorting works
 
-Images are sorted newest first using the capture timestamp when EXIF is available, and Go time formatting like `2006-01` is used to produce sortable year-month keys.[cite:25][cite:103][cite:104]
+Images are sorted newest first using the capture timestamp when EXIF is available. Month grouping keys are generated with Go time formatting such as `2006-01`, which keeps year-month values sortable.
 
 ## Troubleshooting
 
@@ -133,17 +125,22 @@ Initialize the project as a module first:
 go mod init vgallery
 ```
 
-That is required before adding library dependencies with `go get`.[cite:43][cite:35]
+Then add the dependency and tidy the module:
 
-### `module declares its path as github.com/cozy/goexif2`
-
-Use this import and dependency path:
-
-```go
-import "github.com/cozy/goexif2/exif"
+```bash
+go get github.com/xor-gate/goexif2/exif
+go mod tidy
 ```
 
-The `mholt` path does not match the declared module path, which causes Go module resolution to fail.[cite:25][cite:44][cite:46]
+### EXIF import path mismatch
+
+Use this import path in the source code:
+
+```go
+import "github.com/xor-gate/goexif2/exif"
+```
+
+If `go get` or `go build` complains about a different module path, update the code and module dependencies so they all reference the same package path.
 
 ### New images do not appear
 
@@ -156,5 +153,6 @@ Ctrl+C
 
 ## Notes
 
-- JPEG files are the most likely to contain usable EXIF capture time; other image formats often fall back to file modification time.[cite:25]
-- Year-month page keys are generated with Go's time layout formatting, which uses the reference date `2006-01-02` style layouts rather than `YYYY-MM-DD` tokens.[cite:104][cite:114]
+- JPEG images are the most likely to contain usable EXIF capture time.
+- Other formats often fall back to file modification time.
+- Go time layouts use the reference date `2006-01-02`, not `YYYY-MM-DD` tokens.
