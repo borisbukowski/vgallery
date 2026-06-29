@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cozy/goexif2/exif"
+	"github.com/xor-gate/goexif2/exif"
 )
 
 type Image struct {
