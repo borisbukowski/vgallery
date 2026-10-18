@@ -1,6 +1,7 @@
 package main
 
 import (
+	"embed"
 	"flag"
 	"html/template"
 	"log"
@@ -13,6 +14,14 @@ import (
 	"time"
 
 	"github.com/xor-gate/goexif2/exif"
+)
+
+//go:embed templates/*.html
+var templatesFS embed.FS
+
+var (
+	indexTpl = template.Must(template.ParseFS(templatesFS, "templates/index.html"))
+	monthTpl = template.Must(template.ParseFS(templatesFS, "templates/month.html"))
 )
 
 type Image struct {
@@ -45,182 +54,6 @@ type MonthPageData struct {
 	Prev        *MonthNav
 	Next        *MonthNav
 }
-
-var indexTpl = template.Must(template.New("index").Parse(`<!doctype html>
-<html>
-<head>
-	<meta charset="utf-8">
-	<title>{{.Title}}</title>
-	<style>
-		body {
-			font-family: sans-serif;
-			background: #111;
-			color: #eee;
-			margin: 0;
-			padding: 16px;
-		}
-		h1 {
-			margin: 0 0 16px;
-		}
-		.months {
-			display: flex;
-			flex-direction: column;
-			gap: 12px;
-			max-width: 900px;
-		}
-		.month-link {
-			display: flex;
-			align-items: center;
-			gap: 14px;
-			padding: 12px 14px;
-			background: #1b1b1b;
-			border: 1px solid #333;
-			border-radius: 8px;
-			color: #8cf;
-			text-decoration: none;
-		}
-		.month-link:hover {
-			background: #222;
-		}
-		.preview {
-			flex: 0 0 auto;
-		}
-		.preview img {
-			display: block;
-			width: 140px;
-			height: 100px;
-			object-fit: cover;
-			border-radius: 6px;
-			background: #222;
-		}
-		.info {
-			display: flex;
-			flex: 1 1 auto;
-			justify-content: space-between;
-			align-items: center;
-			gap: 12px;
-			min-width: 0;
-		}
-		.label {
-			font-size: 1rem;
-			color: #8cf;
-		}
-		.count {
-			color: #aaa;
-			white-space: nowrap;
-		}
-	</style>
-</head>
-<body>
-	<h1>{{.Title}}</h1>
-
-	<div class="months">
-	{{range .Months}}
-		<a class="month-link" href="/month/{{.Key}}">
-			<div class="preview">
-				<img src="/imgs/{{(index .Images 0).Name}}" alt="{{.Label}}" loading="lazy">
-			</div>
-			<div class="info">
-				<span class="label">{{.Label}}</span>
-				<span class="count">{{len .Images}} image{{if ne (len .Images) 1}}s{{end}}</span>
-			</div>
-		</a>
-	{{else}}
-		<p>No images found.</p>
-	{{end}}
-	</div>
-</body>
-</html>`))
-
-var monthTpl = template.Must(template.New("month").Parse(`<!doctype html>
-<html>
-<head>
-	<meta charset="utf-8">
-	<title>{{.Title}} - {{.Month.Label}}</title>
-	<style>
-		body {
-			font-family: sans-serif;
-			background: #111;
-			color: #eee;
-			margin: 0;
-			padding: 16px;
-		}
-		a {
-			color: #8cf;
-			text-decoration: none;
-		}
-		h1 {
-			margin: 0 0 8px;
-		}
-		.topbar {
-			margin-bottom: 12px;
-		}
-		.meta {
-			color: #aaa;
-			margin-bottom: 16px;
-		}
-		.nav {
-			display: flex;
-			flex-wrap: wrap;
-			gap: 10px;
-			margin-bottom: 18px;
-		}
-		.nav a, .nav span {
-			background: #1b1b1b;
-			border: 1px solid #333;
-			border-radius: 8px;
-			padding: 8px 12px;
-		}
-		.nav .disabled {
-			color: #666;
-		}
-		.grid {
-			display: flex;
-			flex-wrap: wrap;
-			gap: 8px;
-		}
-		.grid img {
-			height: {{.ThumbHeight}}px;
-			width: auto;
-			display: block;
-			border-radius: 4px;
-			background: #222;
-		}
-	</style>
-</head>
-<body>
-	<div class="topbar">
-		<a href="/">[all months]</a>
-	</div>
-
-	<h1>{{.Month.Label}}</h1>
-	<div class="meta">{{len .Month.Images}} image{{if ne (len .Month.Images) 1}}s{{end}}</div>
-
-	<div class="nav">
-		{{if .Prev}}
-			<a href="/month/{{.Prev.Key}}">[older] {{.Prev.Label}}</a>
-		{{else}}
-			<span class="disabled">[older]</span>
-		{{end}}
-
-		{{if .Next}}
-			<a href="/month/{{.Next.Key}}">{{.Next.Label}} [newer]</a>
-		{{else}}
-			<span class="disabled">[newer]</span>
-		{{end}}
-	</div>
-
-	<div class="grid">
-	{{range .Month.Images}}
-		<div>
-			<a href="/imgs/{{.Name}}">
-				<img src="/imgs/{{.Name}}" alt="{{.Name}}" loading="lazy">
-			</a>
-		</div>
-	{{end}}
-	</div>
-</body>
-</html>`))
 
 func main() {
 	dir := flag.String("dir", "~/media/good", "directory with images (can start with ~/)")
