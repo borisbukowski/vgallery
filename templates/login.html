@@ -1,0 +1,8 @@
+{{define "content"}}
+<h1>Admin login</h1>
+{{if .Error}}<p class="flash error">{{.Error}}</p>{{end}}
+<form action="/login" method="post" class="stack narrow">
+  <input type="password" name="password" placeholder="Password" autofocus required>
+  <button>Log in</button>
+</form>
+{{end}}

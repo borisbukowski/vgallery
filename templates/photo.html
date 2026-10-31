@@ -1,0 +1,37 @@
+{{define "content"}}
+<nav class="crumbs"><a href="/">Home</a>{{range .Crumbs}} › <a href="/album/{{.ID}}">{{.Name}}</a>{{end}}</nav>
+<h1>{{.Photo.Title}}</h1>
+<div class="viewer">
+  {{if .Prev}}<a class="nav prev" href="/photo/{{.Prev}}" rel="prev" title="Newer">‹</a>{{else}}<span></span>{{end}}
+  <a href="/img/{{.Photo.ID}}/orig" target="_blank"><img src="/img/{{.Photo.ID}}/medium" alt="{{.Photo.Title}}"></a>
+  {{if .Next}}<a class="nav next" href="/photo/{{.Next}}" rel="next" title="Older">›</a>{{else}}<span></span>{{end}}
+</div>
+<div class="info">
+  {{if .Photo.Description}}<p>{{.Photo.Description}}</p>{{end}}
+  {{if .Photo.Tags}}<p class="taglist">{{range .Photo.Tags}}<a href="/tag/{{.}}">#{{.}}</a> {{end}}</p>{{end}}
+  <p class="muted">{{.Photo.Width}} × {{.Photo.Height}} px · added {{date .Photo.Added}} ·
+    <a href="/img/{{.Photo.ID}}/orig" download="{{.Photo.Original}}">Download original</a></p>
+</div>
+{{if .Admin}}
+<section class="admin">
+  <h2>Edit photo</h2>
+  <form action="/admin/photo/{{.Photo.ID}}/edit" method="post" class="stack">
+    <input name="title" value="{{.Photo.Title}}" placeholder="Title" required>
+    <textarea name="description" rows="3" placeholder="Description">{{.Photo.Description}}</textarea>
+    <input name="tags" value="{{.TagsCSV}}" placeholder="Tags, comma separated">
+    <button>Save</button>
+  </form>
+  <form action="/admin/photo/{{.Photo.ID}}/delete" method="post" onsubmit="return confirm('Delete this photo?')">
+    <button class="danger">Delete photo</button>
+  </form>
+</section>
+{{end}}
+<script>
+document.addEventListener('keydown', function (e) {
+  if (e.target.matches('input, textarea')) return;
+  var sel = e.key === 'ArrowLeft' ? 'a.prev' : e.key === 'ArrowRight' ? 'a.next' : null;
+  var a = sel && document.querySelector(sel);
+  if (a) location.href = a.href;
+});
+</script>
+{{end}}

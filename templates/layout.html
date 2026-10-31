@@ -1,0 +1,48 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{if .Title}}{{.Title}} · {{end}}Gallery</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">Gallery</a>
+  <nav>
+    <a href="/tags">Tags</a>
+    <form action="/search" method="get" class="search">
+      <input type="search" name="q" placeholder="Search…" value="{{.Query}}">
+    </form>
+    {{if .Admin}}
+      <form action="/logout" method="post"><button class="link">Log out</button></form>
+    {{else}}
+      <a href="/login">Admin</a>
+    {{end}}
+  </nav>
+</header>
+<main>
+{{if .Msg}}<p class="flash">{{.Msg}}</p>{{end}}
+{{template "content" .}}
+</main>
+</body>
+</html>{{end}}
+
+{{define "albumgrid"}}
+<div class="grid albums">
+{{range .}}
+  <a class="card" href="/album/{{.ID}}">
+    {{if .Cover}}<img loading="lazy" src="/img/{{.Cover}}/thumb" alt="">{{else}}<div class="empty"></div>{{end}}
+    <div class="meta"><strong>{{.Name}}</strong><span>{{.Count}} photo{{if ne .Count 1}}s{{end}}</span></div>
+  </a>
+{{end}}
+</div>
+{{end}}
+
+{{define "photogrid"}}
+<div class="grid photos">
+{{range .}}
+  <a class="thumb" href="/photo/{{.ID}}"><img loading="lazy" src="/img/{{.ID}}/thumb" alt="{{.Title}}" title="{{.Title}}"></a>
+{{end}}
+</div>
+{{end}}
