@@ -1,0 +1,20 @@
+[Unit]
+Description=Read-only Go photo gallery
+After=network.target
+
+[Service]
+User=vgallery
+Group=vgallery
+ExecStart=/usr/local/bin/vgallery -dir /srv/photos -cache /var/cache/vgallery -listen 127.0.0.1:8080
+CacheDirectory=vgallery
+CacheDirectoryMode=0700
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/srv/photos
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

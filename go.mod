@@ -1,3 +1,8 @@
-module gallery
+module vgallery
 
-go 1.22
+go 1.24.0
+
+require (
+ github.com/disintegration/imaging v1.6.2
+ golang.org/x/image v0.32.0
+)

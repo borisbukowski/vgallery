@@ -1,49 +1,69 @@
-# Gallery — a small Piwigo-style photo gallery in Go
+# vgallery
 
-Standard library only (no dependencies). Requires Go 1.22+.
+Dateisystembasierte, schreibgeschützte Go-Webgalerie für JPEG und statische WebP-Dateien.
 
-## Run
+## Build
 
-    go run .                                   # http://localhost:8080
-    GALLERY_PASSWORD=secret go run . -addr :9000 -data /srv/gallery
+Go >= 1.24; beim ersten Build Internetzugang für Module.
 
-If `GALLERY_PASSWORD` is unset, a random admin password is printed at startup.
-Log in via **Admin** (top right), create an album, and upload photos.
+    go mod tidy
+    go fmt ./...
+    go vet ./...
+    CGO_ENABLED=0 go build -trimpath -o vgallery .
+    ./vgallery -dir ~/media/good -listen 127.0.0.1:8080
 
-Build a single binary (templates and CSS are embedded):
+Dann http://127.0.0.1:8080 öffnen.
 
-    go build -o gallery . && ./gallery
+    ./vgallery -h
+    ./vgallery -dir /srv/photos -cache /var/cache/vgallery -listen 0.0.0.0:8080 -workers 2 -thumb 480 -preview 1920 -title "Meine Fotos"
 
-## Bulk import (like Piwigo's folder sync)
+## Verhalten
 
-    go run . -import ~/Pictures
+* Bestehende Unterverzeichnisse sind Alben; keine Datenbank, kein Import.
+* Verzeichnis wird bei jedem Seitenaufruf neu gelesen; Browser neu laden, um neue Dateien zu sehen.
+* JPG, JPEG und statisches WebP, unabhängig von Groß-/Kleinschreibung.
+* Thumbnail und Vorschau als JPEG, weiße Fläche bei Transparenz.
+* Verhältnistreue Verkleinerung, kein Hochskalieren. EXIF-Orientierung über imaging.
+* Beide Ableitungen werden beim ersten Bildabruf erzeugt und atomar gespeichert.
+* Cache-Schlüssel: Quellwurzel, relativer Pfad, Größe, mtime mit Nanosekunden und Zielgrößen.
+* Keine Vollinhaltsprüfung: Änderungen mit unveränderter Größe und mtime erfordern Cache-Löschung.
+* Cache außerhalb der Fotowurzel; keine automatische Bereinigung alter Varianten.
+* Bei gestopptem Dienst kann der dedizierte Cache-Inhalt gelöscht werden.
+* Pro Bild höchstens 60 Millionen Pixel standardmäßig; zwei parallele Konvertierungen.
+* Das ist keine harte RAM-Grenze: Decoder, Bildkopien und Resize benötigen zusätzlichen Speicher.
+* HTTP-Handler laufen parallel; Konvertierungen sind begrenzt, identische Anforderungen gebündelt.
+* Ordner/Dateien mit führendem Punkt sowie Symlink-Einträge werden in der Übersicht ausgeblendet.
+* os.Root begrenzt Dateizugriff auf die Fotowurzel. Symlinks innerhalb dieser Wurzel können bei direkter URL adressiert werden; Dotfiles werden nur ausgeblendet, nicht als Berechtigungsgrenze behandelt.
+* Originalroute veröffentlicht Originaldateien einschließlich eventuell vorhandener EXIF-/GPS-Daten.
+* Animierte WebP-Dateien sind nicht unterstützt. Fehlerhafte Dateien bleiben sichtbar, können aber kein Thumbnail erhalten.
+* Kein Login, keine Uploads, Benutzerrechte, Kommentare, Suche oder Piwigo-Kompatibilität.
+* Nur vertrauenswürdige lokale Bildbestände verwenden. Nicht als root betreiben.
+* Standardmäßig nur Loopback. Für externen Zugriff Reverse Proxy mit HTTPS und Authentifizierung nutzen.
 
-Every folder becomes an album, nested like the folders; every JPEG/PNG/GIF
-becomes a photo. Re-running skips images already in the same album.
+## Beispielstruktur
 
-## Features
+    /srv/photos/
+      Urlaub/
+        Strand.jpg
+        Berge.webp
+      Familie/
+        Treffen.jpeg
 
-- Nested albums with cover images and recursive photo counts
-- Upload (multi-file), edit title/description/tags, delete photos and albums
-- Thumbnails (320px square crops) and 1400px viewer size, generated lazily and cached
-- EXIF orientation honoured for thumbnails and dimensions
-- Tags with a tag cloud, plus full-text search over title/description/tags/filename
-- Photo viewer with prev/next and ←/→ keys; download original
-- Pagination, responsive layout, automatic dark mode
-- Admin login (constant-time compare, HttpOnly SameSite cookie, same-origin check on POSTs)
-- Content-hash file names: duplicate uploads in an album are rejected; files are
-  only deleted when no photo record uses them
+## systemd (optional)
 
-## Data layout
+Binary nach /usr/local/bin/vgallery kopieren. Separaten Systembenutzer vgallery anlegen,
+Leserechte auf Fotos und Durchquerungsrechte der Elternverzeichnisse vergeben.
+Die Service-Datei setzt /srv/photos voraus; gegebenenfalls anpassen.
 
-    data/gallery.json   all metadata (albums, photos, tags)
-    data/photos/        originals, named by SHA-256
-    data/thumbs/        cached renditions
+    sudo cp vgallery.service /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now vgallery
+    journalctl -u vgallery -f
 
-## Not (yet) in this version
+Der Dienst legt seinen Cache via CacheDirectory an und lauscht nur auf Loopback.
+Kein TLS oder Login eingebaut.
 
-Multiple users / permissions, private albums, comments, ratings, EXIF display,
-video, moving photos between albums, plugins/themes. The JSON store is fine for
-personal galleries; for very large collections swap `Store` for SQLite/Postgres
-(its methods are the only thing the handlers touch). Put it behind a TLS
-reverse proxy (Caddy/nginx) for public use.
+## Prüfung
+
+Das Projekt wurde in der Erstellungsumgebung nicht mit einem Go-Compiler ausgeführt.
+Vor produktivem Einsatz lokal bauen und mit dem eigenen Bildbestand testen.

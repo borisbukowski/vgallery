@@ -1,9 +1,0 @@
-{{define "content"}}
-<h1>{{.Heading}}</h1>
-{{if .Photos}}
-  {{template "photogrid" .Photos}}
-  <p class="muted">{{len .Photos}} photo(s)</p>
-{{else}}
-  <p class="muted">Nothing found.</p>
-{{end}}
-{{end}}

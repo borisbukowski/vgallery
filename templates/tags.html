@@ -1,6 +1,0 @@
-{{define "content"}}
-<h1>Tags</h1>
-<p class="cloud">
-{{range .Tags}}<a class="s{{.Size}}" href="/tag/{{.Name}}">{{.Name}} <small>{{.Count}}</small></a> {{else}}<span class="muted">No tags yet.</span>{{end}}
-</p>
-{{end}}
