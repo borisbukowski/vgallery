@@ -310,6 +310,10 @@ func main() {
 	defer root.Close()
 	slots = make(chan struct{}, *workers)
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /robots.txt", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprint(w, "User-agent: *\nDisallow: /\n")
+	})
 	mux.HandleFunc("GET /{$}", browse)
 	mux.HandleFunc("GET /original", original)
 	mux.HandleFunc("GET /thumb", derivative)
