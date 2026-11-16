@@ -214,7 +214,7 @@ func browse(w http.ResponseWriter, r *http.Request) {
 			return a.Album
 		}
 
-		return a.Name < b.Name
+		return a.Name > b.Name
 	})
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
