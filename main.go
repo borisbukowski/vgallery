@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"embed"
 	"flag"
 	"fmt"
@@ -30,7 +32,13 @@ import (
 var assets embed.FS
 
 var (
-	root *os.Root
+	root                         *os.Root
+	trashMu                      sync.Mutex
+	csrfToken                    = rand.Text()
+	adminUserHash, adminPassHash [32]byte
+	secureCookie                 bool
+	sessionMu                    sync.Mutex
+	sessions                     = make(map[string]time.Time)
 
 	cache string
 	title string
@@ -51,10 +59,13 @@ type Item struct {
 	Thumb    string
 	Preview  string
 	Original string
+	Trash    string
 	Album    bool
 }
 
 type Page struct {
+	Admin     bool
+	CSRFToken string
 	Title     string
 	Current   string
 	Parent    string
@@ -62,6 +73,7 @@ type Page struct {
 	Items     []Item
 }
 
+// expand expands a leading tilde using the current home directory.
 func expand(p string) string {
 	if p == "~" || strings.HasPrefix(p, "~/") {
 		home, err := os.UserHomeDir()
@@ -78,6 +90,7 @@ func expand(p string) string {
 	return p
 }
 
+// supported checks the extension; rendering also validates the decoded format.
 func supported(p string) bool {
 	switch strings.ToLower(filepath.Ext(p)) {
 	case ".jpg", ".jpeg", ".webp":
@@ -87,12 +100,14 @@ func supported(p string) bool {
 	}
 }
 
+// link encodes a root-relative photo path into a route URL.
 func link(route, p string) string {
 	return route + "?" + url.Values{
 		"p": {p},
 	}.Encode()
 }
 
+// requestPath rejects hidden, nonrelative, and symlink paths.
 func requestPath(r *http.Request) (string, error) {
 	p := r.URL.Query().Get("p")
 
@@ -104,9 +119,23 @@ func requestPath(r *http.Request) (string, error) {
 		return "", fmt.Errorf("invalid path")
 	}
 
-	return filepath.FromSlash(p), nil
+	// Block hidden paths (including .trash) and symlink aliases on all routes.
+	for _, part := range strings.Split(p, "/") {
+		if strings.HasPrefix(part, ".") {
+			return "", fmt.Errorf("hidden path")
+		}
+	}
+	clean := filepath.FromSlash(p)
+	for q := clean; q != "."; q = filepath.Dir(q) {
+		st, err := root.Lstat(q)
+		if err != nil || st.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("missing or symlink path")
+		}
+	}
+	return clean, nil
 }
 
+// regular requires a supported regular image file.
 func regular(p string) (fs.FileInfo, error) {
 	st, err := root.Stat(p)
 	if err != nil {
@@ -152,6 +181,7 @@ func albumCover(dir string) string {
 	return ""
 }
 
+// browse renders the public gallery with optional authenticated admin controls.
 func browse(w http.ResponseWriter, r *http.Request) {
 	p, err := requestPath(r)
 	if err != nil {
@@ -173,6 +203,8 @@ func browse(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := Page{
+		Admin:     isAdmin(r),
+		CSRFToken: csrfToken,
 		Title:     title,
 		Current:   filepath.ToSlash(p),
 		HasParent: p != ".",
@@ -203,6 +235,7 @@ func browse(w http.ResponseWriter, r *http.Request) {
 				Thumb:    link("/thumb", rel),
 				Preview:  link("/preview", rel),
 				Original: link("/original", rel),
+				Trash:    link("/trash", rel),
 			})
 		}
 	}
@@ -219,12 +252,165 @@ func browse(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Add("Vary", "Cookie")
 
 	if err := page.ExecuteTemplate(w, "gallery.html", data); err != nil {
 		log.Printf("template: %v", err)
 	}
 }
 
+// loadAdminCredentials fails closed: write access is never enabled without credentials.
+func loadAdminCredentials() {
+	user := os.Getenv("VGALLERY_USER")
+	name := os.Getenv("VGALLERY_PASSWORD_FILE")
+	if user == "" || strings.ContainsAny(user, ":\r\n") || name == "" {
+		log.Fatal("Set VGALLERY_USER and VGALLERY_PASSWORD_FILE")
+	}
+	b, err := os.ReadFile(expand(name))
+	if err != nil {
+		log.Fatalf("password file: %v", err)
+	}
+	password := strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r")
+	if password == "" || strings.ContainsAny(password, "\r\n") {
+		log.Fatal("Password file must contain one nonempty line")
+	}
+	adminUserHash = sha256.Sum256([]byte(user))
+	adminPassHash = sha256.Sum256([]byte(password))
+}
+
+// Sessions live only in memory, expire after eight hours, and vanish on restart.
+func isAdmin(r *http.Request) bool {
+	c, err := r.Cookie("vgallery_admin")
+	if err != nil {
+		return false
+	}
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+	expires, ok := sessions[c.Value]
+	if ok && !time.Now().Before(expires) {
+		delete(sessions, c.Value)
+		return false
+	}
+	return ok
+}
+
+// adminLogin is a normal navigation so browsers can show their Basic-auth prompt.
+// Successful login creates a cookie; public routes never challenge for credentials.
+func adminLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	user, pass, ok := r.BasicAuth()
+	uh, ph := sha256.Sum256([]byte(user)), sha256.Sum256([]byte(pass))
+	um := subtle.ConstantTimeCompare(uh[:], adminUserHash[:])
+	pm := subtle.ConstantTimeCompare(ph[:], adminPassHash[:])
+	if !ok || um&pm != 1 {
+		w.Header().Set("WWW-Authenticate", `Basic realm="vgallery-admin", charset="UTF-8"`)
+		http.Error(w, "Admin authentication required", http.StatusUnauthorized)
+		return
+	}
+	token := rand.Text()
+	now := time.Now()
+	expires := now.Add(8 * time.Hour)
+	sessionMu.Lock()
+	for k, expiry := range sessions {
+		if !now.Before(expiry) {
+			delete(sessions, k)
+		}
+	}
+	sessions[token] = expires
+	sessionMu.Unlock()
+	http.SetCookie(w, &http.Cookie{
+		Name: "vgallery_admin", Value: token, Path: "/", HttpOnly: true,
+		Secure: secureCookie, SameSite: http.SameSiteStrictMode,
+		MaxAge: 8 * 60 * 60, Expires: expires,
+	})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// requireAdmin checks the session rather than challenging background fetch requests.
+func requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if !isAdmin(r) {
+			http.Error(w, "Admin login required; open /admin/login", http.StatusUnauthorized)
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-CSRF-Token")), []byte(csrfToken)) != 1 {
+			http.Error(w, "Invalid request token; reload the gallery", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// trashImage moves originals without decoding them, including damaged images.
+// Each entry records the previous relative path; no permanent deletion is exposed.
+func trashImage(w http.ResponseWriter, r *http.Request) {
+	trashMu.Lock()
+	defer trashMu.Unlock()
+	p, err := requestPath(r)
+	if err != nil {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	if _, err := regular(p); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err = root.Mkdir(".trash", 0700); err != nil && !os.IsExist(err) {
+		log.Printf("trash mkdir: %v", err)
+		http.Error(w, "Cannot create trash", http.StatusInternalServerError)
+		return
+	}
+	st, err := root.Lstat(".trash")
+	if err != nil || !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
+		http.Error(w, "Trash must be a real directory", http.StatusInternalServerError)
+		return
+	}
+	// Reserve a private destination; never overwrite an existing trash entry.
+	var dest string
+	for {
+		dest = filepath.Join(".trash", time.Now().UTC().Format("20060102T150405Z")+"-"+rand.Text())
+		err = root.Mkdir(dest, 0700)
+		if !os.IsExist(err) {
+			break
+		}
+	}
+	if err != nil {
+		http.Error(w, "Cannot create trash entry", http.StatusInternalServerError)
+		return
+	}
+	moved := false
+	metadata := filepath.Join(dest, "original-path.txt")
+	defer func() {
+		if !moved {
+			root.Remove(metadata)
+			root.Remove(dest)
+		}
+	}()
+	f, err := root.OpenFile(metadata, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err == nil {
+		_, writeErr := f.WriteString(filepath.ToSlash(p) + "\n")
+		closeErr := f.Close()
+		err = writeErr
+		if err == nil {
+			err = closeErr
+		}
+	}
+	if err == nil {
+		// Rename only: cross-filesystem moves fail without copying or deleting originals.
+		err = root.Rename(p, filepath.Join(dest, filepath.Base(p)))
+	}
+	if err != nil {
+		log.Printf("trash %q: %v", p, err)
+		http.Error(w, "Cannot move image; see server log", http.StatusInternalServerError)
+		return
+	}
+	moved = true
+	log.Printf("trashed %q -> %q", p, dest)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// original streams the original without image conversion.
 func original(w http.ResponseWriter, r *http.Request) {
 	p, err := requestPath(r)
 	if err != nil {
@@ -255,6 +441,7 @@ func original(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, st.Name(), st.ModTime(), f)
 }
 
+// saveJPEG publishes a completed cache file using a temporary file and rename.
 func saveJPEG(name string, img image.Image) error {
 	f, err := os.CreateTemp(cache, ".render-*")
 	if err != nil {
@@ -280,6 +467,7 @@ func saveJPEG(name string, img image.Image) error {
 	return os.Rename(tmp, name)
 }
 
+// render decodes once and produces both thumbnail and preview sizes.
 func render(p string, st fs.FileInfo, small, large string) error {
 	f, err := root.Open(p)
 	if err != nil {
@@ -357,6 +545,7 @@ func render(p string, st fs.FileInfo, small, large string) error {
 	return nil
 }
 
+// derivative serializes cache misses by key and limits concurrent rendering.
 func derivative(w http.ResponseWriter, r *http.Request) {
 	p, err := requestPath(r)
 	if err != nil {
@@ -448,11 +637,12 @@ func derivative(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
+// main validates configuration and installs public and admin-only routes.
 func main() {
 	dir := flag.String(
 		"dir",
 		"~/media/good",
-		"Photo directory (read-only)",
+		"Photo directory (write access needed for admin trash moves)",
 	)
 
 	listen := flag.String(
@@ -507,7 +697,9 @@ func main() {
 		"Maximum source pixels per image",
 	)
 
+	flag.BoolVar(&secureCookie, "secure-cookie", true, "Require HTTPS for admin session cookies (disable only for local HTTP)")
 	flag.Parse()
+	loadAdminCredentials()
 
 	if thumb < 1 ||
 		preview < thumb ||
@@ -573,6 +765,8 @@ func main() {
 	mux.HandleFunc("GET /original", original)
 	mux.HandleFunc("GET /thumb", derivative)
 	mux.HandleFunc("GET /preview", derivative)
+	mux.HandleFunc("GET /admin/login", adminLogin)
+	mux.HandleFunc("POST /trash", requireAdmin(trashImage))
 
 	handler := http.HandlerFunc(func(
 		w http.ResponseWriter,
@@ -583,6 +777,7 @@ func main() {
 		w.Header().Set(
 			"Content-Security-Policy",
 			"default-src 'self'; "+
+				"connect-src 'self'; "+
 				"img-src 'self'; "+
 				"style-src 'unsafe-inline'; "+
 				"script-src 'unsafe-inline'; "+

@@ -2,6 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="utf-8">
+  <meta name="csrf-token" content="{{.CSRFToken}}">
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <title>{{.Title}}</title>
@@ -344,6 +345,8 @@
 
       <nav aria-label="Ordnernavigation">
         <a href="/">Start</a>
+        <span aria-hidden="true">·</span>
+        {{if .Admin}}<span>Admin angemeldet</span>{{else}}<a href="/admin/login">Admin anmelden</a>{{end}}
         <span aria-hidden="true">/</span>
         <span class="current-path">{{.Current}}</span>
 
@@ -390,6 +393,7 @@
             class="card photo"
             data-preview="{{.Preview}}"
             data-original="{{.Original}}"
+            data-trash="{{.Trash}}"
             data-name="{{.Name}}"
             aria-label="Bild öffnen: {{.Name}}"
           >
@@ -447,6 +451,10 @@
           Original öffnen
         </a>
 
+        {{if .Admin}}
+        <button type="button" id="trash">In den Papierkorb</button>
+        {{end}}
+
         <button
           type="button"
           id="close"
@@ -479,6 +487,9 @@
       const next = document.querySelector("#next");
       const close = document.querySelector("#close");
 
+      const trash = document.querySelector("#trash");
+      const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+      let moving = false;
       let current = 0;
       let requestID = 0;
 
@@ -486,7 +497,7 @@
       next.disabled = photos.length < 2;
 
       function show(index) {
-        if (photos.length === 0) {
+        if (moving || photos.length === 0) {
           return;
         }
 
@@ -537,7 +548,52 @@
       }
 
       photos.forEach((photo, index) => {
-        photo.addEventListener("click", () => show(index));
+        photo.addEventListener("click", () => show(photos.indexOf(photo)));
+      });
+
+      // Do not change the displayed image while a move is in progress.
+      lightbox.addEventListener("cancel", event => {
+        if (moving) event.preventDefault();
+      });
+
+      if (trash) trash.addEventListener("click", async () => {
+        if (moving || !photos.length) return;
+        const photo = photos[current];
+        if (!window.confirm('"' + photo.dataset.name + '" in den Papierkorb verschieben?')) return;
+        moving = true;
+        requestID++;
+        trash.disabled = previous.disabled = next.disabled = close.disabled = true;
+        status.textContent = "Bild wird verschoben …";
+        let succeeded = false;
+        try {
+          const response = await fetch(photo.dataset.trash, {
+            method: "POST", credentials: "same-origin",
+            headers: { "X-CSRF-Token": csrfToken }
+          });
+          if (!response.ok) throw new Error(await response.text());
+          photos.splice(current, 1);
+          photo.remove();
+          succeeded = true;
+        } catch (error) {
+          status.textContent = "Verschieben fehlgeschlagen: " + error.message +
+            " Bei Verbindungsfehlern bitte neu laden und prüfen.";
+        } finally {
+          moving = false;
+          trash.disabled = close.disabled = false;
+          previous.disabled = next.disabled = photos.length < 2;
+        }
+        if (!succeeded) return;
+        if (photos.length) {
+          show(Math.min(current, photos.length - 1));
+        } else {
+          lightbox.close();
+          if (!document.querySelector(".grid .card")) {
+            const empty = document.createElement("p");
+            empty.className = "empty";
+            empty.textContent = "Dieser Ordner enthält keine sichtbaren Alben oder unterstützten Bilder.";
+            document.querySelector(".grid").append(empty);
+          }
+        }
       });
 
       previous.addEventListener("click", () => {
@@ -560,7 +616,7 @@
       });
 
       document.addEventListener("keydown", event => {
-        if (!lightbox.open) {
+        if (!lightbox.open || moving) {
           return;
         }
 
