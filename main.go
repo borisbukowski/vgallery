@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/disintegration/imaging"
+	"golang.org/x/crypto/bcrypt"
 	_ "golang.org/x/image/webp"
 )
 
@@ -35,7 +37,7 @@ var (
 	root                         *os.Root
 	trashMu                      sync.Mutex
 	csrfToken                    = rand.Text()
-	adminUserHash, adminPassHash [32]byte
+	adminPasswords map[string][]byte
 	secureCookie                 bool
 	sessionMu                    sync.Mutex
 	sessions                     = make(map[string]time.Time)
@@ -259,23 +261,46 @@ func browse(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// loadAdminCredentials fails closed: write access is never enabled without credentials.
-func loadAdminCredentials() {
-	user := os.Getenv("VGALLERY_USER")
-	name := os.Getenv("VGALLERY_PASSWORD_FILE")
-	if user == "" || strings.ContainsAny(user, ":\r\n") || name == "" {
-		log.Fatal("Set VGALLERY_USER and VGALLERY_PASSWORD_FILE")
-	}
-	b, err := os.ReadFile(expand(name))
+// loadAdminCredentials loads bcrypt entries produced by Apache htpasswd -B.
+// Fail closed on missing, empty, malformed, duplicate, or unsupported entries.
+func loadAdminCredentials(name string) {
+	f, err := os.Open(expand(name))
 	if err != nil {
-		log.Fatalf("password file: %v", err)
+		log.Fatalf("htpasswd: %v", err)
 	}
-	password := strings.TrimSuffix(strings.TrimSuffix(string(b), "\n"), "\r")
-	if password == "" || strings.ContainsAny(password, "\r\n") {
-		log.Fatal("Password file must contain one nonempty line")
+	defer f.Close()
+
+	adminPasswords = make(map[string][]byte)
+	scanner := bufio.NewScanner(f)
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		line := strings.TrimSuffix(scanner.Text(), "\r")
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		user, hash, ok := strings.Cut(line, ":")
+		if !ok || user == "" || strings.ContainsAny(user, "\r\n") {
+			log.Fatalf("htpasswd: malformed entry on line %d", lineNo)
+		}
+		if _, exists := adminPasswords[user]; exists {
+			log.Fatalf("htpasswd: duplicate username on line %d", lineNo)
+		}
+		if len(hash) != 60 || !(strings.HasPrefix(hash, "$2a$") ||
+			strings.HasPrefix(hash, "$2b$") || strings.HasPrefix(hash, "$2y$")) {
+			log.Fatalf("htpasswd: line %d requires bcrypt; create entries with htpasswd -B", lineNo)
+		}
+		if _, err := bcrypt.Cost([]byte(hash)); err != nil {
+			log.Fatalf("htpasswd: invalid bcrypt hash on line %d: %v", lineNo, err)
+		}
+		adminPasswords[user] = []byte(hash)
 	}
-	adminUserHash = sha256.Sum256([]byte(user))
-	adminPassHash = sha256.Sum256([]byte(password))
+	if err := scanner.Err(); err != nil {
+		log.Fatalf("htpasswd: %v", err)
+	}
+	if len(adminPasswords) == 0 {
+		log.Fatal("htpasswd: no users configured")
+	}
 }
 
 // Sessions live only in memory, expire after eight hours, and vanish on restart.
@@ -299,10 +324,8 @@ func isAdmin(r *http.Request) bool {
 func adminLogin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	user, pass, ok := r.BasicAuth()
-	uh, ph := sha256.Sum256([]byte(user)), sha256.Sum256([]byte(pass))
-	um := subtle.ConstantTimeCompare(uh[:], adminUserHash[:])
-	pm := subtle.ConstantTimeCompare(ph[:], adminPassHash[:])
-	if !ok || um&pm != 1 {
+	hash, exists := adminPasswords[user]
+	if !ok || !exists || bcrypt.CompareHashAndPassword(hash, []byte(pass)) != nil {
 		w.Header().Set("WWW-Authenticate", `Basic realm="vgallery-admin", charset="UTF-8"`)
 		http.Error(w, "Admin authentication required", http.StatusUnauthorized)
 		return
@@ -641,7 +664,7 @@ func derivative(w http.ResponseWriter, r *http.Request) {
 func main() {
 	dir := flag.String(
 		"dir",
-		"~/media/good",
+		"/var/www/vgallery",
 		"Photo directory (write access needed for admin trash moves)",
 	)
 
@@ -698,8 +721,9 @@ func main() {
 	)
 
 	flag.BoolVar(&secureCookie, "secure-cookie", true, "Require HTTPS for admin session cookies (disable only for local HTTP)")
+	htpasswdFile := flag.String("htpasswd", "/etc/vgallery/htpasswd", "Apache htpasswd file (bcrypt entries created with htpasswd -B)")
 	flag.Parse()
-	loadAdminCredentials()
+	loadAdminCredentials(*htpasswdFile)
 
 	if thumb < 1 ||
 		preview < thumb ||

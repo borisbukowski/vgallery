@@ -9,6 +9,7 @@ Die Galerie einschließlich Originaldateien bleibt ohne Anmeldung erreichbar. Nu
 Go >= 1.25; beim ersten Build Internetzugang für Module. Die Papierkorb-Funktion verwendet `os.Root.Rename`.
 
 ```bash
+go get golang.org/x/crypto/bcrypt
 go mod tidy
 go fmt ./...
 go vet ./...
@@ -19,35 +20,36 @@ CGO_ENABLED=0 go build -trimpath -o vgallery .
 
 ## Admin-Zugang einrichten
 
-Die Anwendung benötigt beim Start beide Umgebungsvariablen, auch wenn zunächst nur die öffentliche Galerie genutzt wird:
+Die Anwendung liest beim Start `/etc/vgallery/htpasswd`. Ein anderer Pfad lässt sich mit `-htpasswd` angeben. Die bisherigen Variablen `VGALLERY_USER` und `VGALLERY_PASSWORD_FILE` werden nicht mehr verwendet.
 
-* `VGALLERY_USER`: Admin-Benutzername; darf weder Doppelpunkt noch Zeilenumbruch enthalten.
-* `VGALLERY_PASSWORD_FILE`: Pfad zu einer lesbaren Datei mit einem nichtleeren Passwort auf genau einer Zeile. Ein abschließender Zeilenumbruch ist erlaubt.
+Unterstützt werden ausschließlich bcrypt-Einträge, erzeugt mit Apache `htpasswd -B`. Das Standardformat von `htpasswd` ohne `-B` wird absichtlich nicht unterstützt. Mehrere Benutzer sind möglich; jeder eingetragene Benutzer hat dieselben Admin-Rechte. Fehlende, leere oder ungültige Dateien verhindern den Start. Änderungen erfordern einen Neustart; dieser beendet auch alle bestehenden Sitzungen.
 
-Fehlende oder ungültige Zugangsdaten verhindern den Start. Zugangsdaten werden nur beim Start eingelesen; Änderungen erfordern einen Neustart.
-
-Passwort interaktiv anlegen, ohne es als Befehl in der Shell-History abzulegen (Bash):
+Beispiel für Debian/Ubuntu und einen bereits vorhandenen Dienstbenutzer mit Gruppe `vgallery`:
 
 ```bash
-install -d -m 700 ~/.config/vgallery
-
-(
-    umask 077
-    read -r -s -p 'Admin-Passwort: ' password
-    printf '\n'
-    printf '%s\n' "$password" > ~/.config/vgallery/password
-    unset password
-)
-
-export VGALLERY_USER='boris'
-export VGALLERY_PASSWORD_FILE="$HOME/.config/vgallery/password"
+sudo apt install apache2-utils
+sudo install -d -o root -g vgallery -m 750 /etc/vgallery
+sudo sh -c 'umask 027; htpasswd -cB /etc/vgallery/htpasswd boris'
+sudo chown root:vgallery /etc/vgallery/htpasswd
+sudo chmod 640 /etc/vgallery/htpasswd
+sudo install -d -o vgallery -g vgallery -m 750 /var/www/vgallery
 ```
+
+`-c` nur beim erstmaligen Anlegen verwenden: Es überschreibt eine vorhandene Datei. Weitere Benutzer oder Passwortänderungen:
+
+```bash
+sudo htpasswd -B /etc/vgallery/htpasswd boris
+sudo systemctl restart vgallery
+```
+
+Das Passwort wird interaktiv abgefragt. Apache muss nicht als Webserver laufen; benötigt wird nur dessen `htpasswd`-Werkzeug.
+
+Das Standard-Bildverzeichnis ist `/var/www/vgallery`; mit `-dir` kann es überschrieben werden. Bestehende `-dir`-Argumente in einer systemd-Unit haben weiterhin Vorrang.
 
 ### Lokal über HTTP starten
 
 ```bash
 ./vgallery \
-    -dir ~/media/good \
     -listen 127.0.0.1:8080 \
     -secure-cookie=false
 ```
@@ -58,7 +60,6 @@ Dann http://127.0.0.1:8080 öffnen. `-secure-cookie=false` nur für lokale HTTP-
 
 ```bash
 ./vgallery \
-    -dir /srv/photos \
     -cache /var/cache/vgallery \
     -listen 127.0.0.1:8080 \
     -workers 2 \
@@ -83,7 +84,7 @@ Weitere Optionen:
 * `POST /trash` erfordert sowohl eine gültige Admin-Sitzung als auch den passenden CSRF-Token. Das Ausblenden der Schaltfläche ist nicht die Zugriffskontrolle; die Prüfung erfolgt im Backend.
 * Sitzungen liegen ausschließlich im RAM, gelten acht Stunden und verschwinden bei einem Serverneustart.
 * Das Sitzungscookie verwendet `HttpOnly`, `SameSite=Strict` und standardmäßig `Secure`.
-* Es gibt einen Admin-Zugang, keine Benutzerverwaltung, keine Rollen, keinen Logout-Button und keine eingebaute Begrenzung von Anmeldeversuchen.
+* Alle Benutzer aus der htpasswd-Datei sind Admins; es gibt keine Rollen, keine Benutzerverwaltung in der Oberfläche, keinen Logout-Button und keine eingebaute Begrenzung von Anmeldeversuchen.
 
 Basic Authentication verschlüsselt Zugangsdaten nicht. Für Netzwerkzugriff HTTPS verwenden; bei Internetfreigabe zusätzlich Anmeldeversuche am Reverse Proxy begrenzen. Browser können Basic-Auth-Zugangsdaten zwischenspeichern; ein Serverneustart beendet Sitzungen, löscht aber nicht den Zugangsdaten-Cache des Browsers.
 
@@ -99,7 +100,7 @@ Die Admin-Anmeldung schützt nicht die Bilder vor fremdem Lesen. Für eine priva
 Das Original wird nicht endgültig gelöscht, sondern innerhalb der Fotowurzel verschoben:
 
 ```text
-/srv/photos/
+/var/www/vgallery/
   Urlaub/
     Strand.jpg
   Familie/
@@ -150,16 +151,14 @@ Für die neue Version sind folgende Anpassungen nötig:
 
 * Leserechte auf Fotos und Durchquerungsrechte der Elternverzeichnisse vergeben.
 * Zum Verschieben benötigt der Dienst Schreib- und Durchquerungsrechte auf den jeweiligen Quellverzeichnissen sowie der Fotowurzel beziehungsweise `.trash`. Reine Leserechte reichen nicht mehr.
-* `VGALLERY_USER` und `VGALLERY_PASSWORD_FILE` im Dienst konfigurieren. Shell-Exports werden nicht automatisch von systemd-Systemdiensten übernommen.
+* Alte `VGALLERY_USER`- und `VGALLERY_PASSWORD_FILE`-Einstellungen aus dem Dienst entfernen; standardmäßig wird `/etc/vgallery/htpasswd` gelesen.
 * Die Passwortdatei muss für den Dienst lesbar sein, darf aber nicht in der öffentlichen Fotowurzel liegen.
-* Vorhandene Sandbox-Regeln prüfen: Ein schreibgeschützter Mount oder eine schreibgeschützte Pfadfreigabe für `/srv/photos` verhindert Papierkorbaktionen. `ReadWritePaths` allein ersetzt keine fehlenden Unix-Dateirechte und hebt nicht jede andere Mount-Beschränkung auf.
+* Vorhandene Sandbox-Regeln prüfen: Ein schreibgeschützter Mount oder eine schreibgeschützte Pfadfreigabe für `/var/www/vgallery` verhindert Papierkorbaktionen. `ReadWritePaths` allein ersetzt keine fehlenden Unix-Dateirechte und hebt nicht jede andere Mount-Beschränkung auf.
 
 Beispiel mit bereits vorhandenem Benutzer und Gruppe `vgallery`:
 
 ```bash
 sudo install -d -o root -g vgallery -m 750 /etc/vgallery
-sudo install -o root -g vgallery -m 640 \
-    ~/.config/vgallery/password /etc/vgallery/password
 sudo systemctl edit vgallery
 ```
 
@@ -167,9 +166,7 @@ In das Drop-in eintragen (Pfade gegebenenfalls anpassen):
 
 ```ini
 [Service]
-Environment="VGALLERY_USER=boris"
-Environment="VGALLERY_PASSWORD_FILE=/etc/vgallery/password"
-ReadWritePaths=/srv/photos
+ReadWritePaths=/var/www/vgallery
 ```
 
 Das Beispiel setzt voraus, dass der Dienst als Benutzer beziehungsweise mit Gruppe `vgallery` läuft und die vorhandene Service-Konfiguration dazu passt. Für HTTPS-Proxybetrieb bleibt `-secure-cookie` aktiviert; nur bei lokalem HTTP-Test `-secure-cookie=false` zur bestehenden `ExecStart`-Konfiguration ergänzen.
@@ -194,7 +191,7 @@ Die vorhandene Service-Datei sieht laut bisheriger Projektbeschreibung einen Cac
 
 ## Prüfung
 
-Die aktualisierte JavaScript-Datei bestand eine Syntaxprüfung. Die Go-Version wurde in der Erstellungsumgebung mangels Go-Compiler nicht gebaut oder zur Laufzeit getestet.
+Die Go-Version wurde in der Erstellungsumgebung mangels Go-Compiler nicht gebaut oder zur Laufzeit getestet. `gallery.html` ist unverändert.
 
 Vor produktivem Einsatz lokal bauen und mit einer Kopie des eigenen Bildbestands prüfen:
 
