@@ -1,20 +1,62 @@
 [Unit]
-Description=Read-only Go photo gallery
+Description=vgallery public photo gallery with authenticated admin actions
 After=network.target
+RequiresMountsFor=/srv/photos
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
+Type=simple
 User=vgallery
 Group=vgallery
-ExecStart=/usr/local/bin/vgallery -dir /srv/photos -cache /var/cache/vgallery -listen 127.0.0.1:8080
+
+# Authentication applies only to admin features; browsing remains public.
+Environment="VGALLERY_USER=boris"
+# systemd reads the root-only source and provides a private runtime copy.
+LoadCredential=admin-password:/etc/vgallery/password
+Environment="VGALLERY_PASSWORD_FILE=%d/admin-password"
+
+# Managed cache, outside the photo tree and writable with ProtectSystem=strict.
 CacheDirectory=vgallery
 CacheDirectoryMode=0700
-Restart=on-failure
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadOnlyPaths=/srv/photos
 UMask=0077
+
+# HTTPS terminates at a reverse proxy. Keep secure cookies enabled.
+# For local HTTP testing only, change -secure-cookie=true to false.
+ExecStart=/usr/local/bin/vgallery \
+    -dir /srv/photos \
+    -cache /var/cache/vgallery \
+    -listen 127.0.0.1:8080 \
+    -workers 2 \
+    -thumb 480 \
+    -preview 1920 \
+    -secure-cookie=true
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+
+# Moving originals to .trash requires writable source directories.
+# This allow-list does not grant Unix filesystem permissions.
+ProtectSystem=strict
+ReadWritePaths=/srv/photos
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vgallery
 
 [Install]
 WantedBy=multi-user.target
