@@ -34,13 +34,13 @@ import (
 var assets embed.FS
 
 var (
-	root                         *os.Root
-	trashMu                      sync.Mutex
-	csrfToken                    = rand.Text()
+	root           *os.Root
+	trashMu        sync.Mutex
+	csrfToken      = rand.Text()
 	adminPasswords map[string][]byte
-	secureCookie                 bool
-	sessionMu                    sync.Mutex
-	sessions                     = make(map[string]time.Time)
+	secureCookie   bool
+	sessionMu      sync.Mutex
+	sessions       = make(map[string]time.Time)
 
 	cache string
 	title string
@@ -183,6 +183,40 @@ func albumCover(dir string) string {
 	return ""
 }
 
+// hasImages reports whether a directory contains a supported image, including
+// in visible subdirectories. Hidden entries and symlinks are ignored.
+func hasImages(dir string) bool {
+	f, err := root.Open(dir)
+	if err != nil {
+		return false
+	}
+	entries, err := f.ReadDir(-1)
+	f.Close()
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") ||
+			entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		if entry.Type().IsRegular() && supported(entry.Name()) {
+			return true
+		}
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") ||
+			entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
+			continue
+		}
+		if hasImages(filepath.Join(dir, entry.Name())) {
+			return true
+		}
+	}
+	return false
+}
+
 // browse renders the public gallery with optional authenticated admin controls.
 func browse(w http.ResponseWriter, r *http.Request) {
 	p, err := requestPath(r)
@@ -225,6 +259,9 @@ func browse(w http.ResponseWriter, r *http.Request) {
 		rel := filepath.ToSlash(filepath.Join(p, entry.Name()))
 
 		if entry.IsDir() {
+			if !hasImages(filepath.Join(p, entry.Name())) {
+				continue
+			}
 			data.Items = append(data.Items, Item{
 				Name:  entry.Name(),
 				Album: true,
