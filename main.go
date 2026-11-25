@@ -496,8 +496,17 @@ func original(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Cache-Control", "no-cache")
+	// Store images in the browser, but revalidate before every reuse so that
+	// moves to trash and changes at the same URL are noticed on the next request.
+	w.Header().Set("Cache-Control", "private, no-cache, must-revalidate")
+	// This metadata validator is weak: it is not a hash of the image contents.
+	etag := sha256.Sum256([]byte(fmt.Sprintf(
+		"original-v1:%s:%s:%d:%d",
+		root.Name(), p, st.Size(), st.ModTime().UnixNano(),
+	)))
+	w.Header().Set("ETag", fmt.Sprintf(`W/"%x"`, etag))
 
+	// ServeContent supplies Last-Modified and handles conditional requests.
 	http.ServeContent(w, r, st.Name(), st.ModTime(), f)
 }
 
@@ -682,10 +691,10 @@ func derivative(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "private, no-cache, must-revalidate")
 	w.Header().Set(
 		"ETag",
-		fmt.Sprintf("\"%x-%s\"", key, filepath.Base(target)),
+		fmt.Sprintf(`W/"%x-%s"`, key, filepath.Base(target)),
 	)
 
 	http.ServeContent(
