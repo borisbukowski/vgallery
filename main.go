@@ -694,7 +694,8 @@ func derivative(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "private, no-cache, must-revalidate")
 	w.Header().Set(
 		"ETag",
-		fmt.Sprintf(`W/"%s"`, key, filepath.Base(target)),
+		// The cache filename already contains the key and derivative type.
+		fmt.Sprintf(`W/"%s"`, filepath.Base(target)),
 	)
 
 	http.ServeContent(
